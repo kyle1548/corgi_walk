@@ -8,7 +8,7 @@
 #include "leg_model.hpp"
 #include "fitted_coefficient.hpp"
 #include "walk_trajectory.hpp"
-#include "bezier.cpp"
+#include "bezier.hpp"
 
 #include <array>
 #include <string>
