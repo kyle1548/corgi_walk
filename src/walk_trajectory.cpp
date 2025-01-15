@@ -32,7 +32,7 @@ int main() {
     double forward_distance = 1.0;
 
     bool use_init_phi = true;
-    std::array<double, 8> init_eta = np.array([1.7908786895256839,0.7368824288764617,1.1794001564068406,-0.07401410141135822,1.1744876957173913,-1.8344700758454735e-15,1.790992783013031,5.5466991499313485]);
+    std::array<double, 8> init_eta = {1.7908786895256839,0.7368824288764617,1.1794001564068406,-0.07401410141135822,1.1744876957173913,-1.8344700758454735e-15,1.790992783013031,5.5466991499313485};
     std::array<double, 4> init_theta = {init_eta[0], init_eta[2], init_eta[4], init_eta[6]};;
     std::array<double, 4> init_beta = {init_eta[1], init_eta[3], init_eta[5], init_eta[7]};
     init_beta[0] *= -1;
