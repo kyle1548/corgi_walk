@@ -3,8 +3,9 @@
 #include <stdexcept>
 #include <vector>
 #include <chrono>
-#include "ros/ros.h"
 
+#include "ros/ros.h"
+#include "corgi_msgs/MotorCmdStamped.h"
 #include "leg_model.hpp"
 #include "fitted_coefficient.hpp"
 #include "walk_gait.hpp"
@@ -15,9 +16,8 @@
 #include <fstream>
 
 // Main function
-int main() {
-    bool sim = true;
-    LegModel leg_model(sim);
+int main(int argc, char **argv) {
+    ros::init(argc, argv, "walk_pub");
     ros::NodeHandle nh;
     ros::Publisher motor_pub = nh.advertise<corgi_msgs::MotorCmdStamped>("motor/command", 1);
     corgi_msgs::MotorCmdStamped motor_cmd;
@@ -27,6 +27,10 @@ int main() {
         &motor_cmd.module_c,
         &motor_cmd.module_d
     };
+    ros::Rate rate(1000);
+
+    bool sim = true;
+    LegModel leg_model(sim);
 
     // User-defined parameters
     double BL = 0.444;
@@ -34,7 +38,7 @@ int main() {
     double CoM_bias = 0.0;
     double velocity = 0.1;
     int sampling = 1000;
-    double stand_height = 0.2 + leg_model.r;
+    double stand_height = 0.2;
     double step_length = 0.4;
     double step_height = 0.06;
     double forward_distance = 2.0;
@@ -79,7 +83,7 @@ int main() {
             first_swing_leg = i;
         }//end if
     }//end for 
-    double duty[4];
+    std::array<double, 4> duty;
     if (!use_init_conf || first_swing_leg == 0) {
         duty = {1 - swing_time, 0.5 - swing_time, 0.5, 0.0};
     } else if (first_swing_leg == 1) {
@@ -94,18 +98,18 @@ int main() {
                         {BL/2, stand_height} ,
                         {-BL/2, stand_height},
                         {-BL/2, stand_height}};
-    double foothold[4][2];
+    std::array<std::array<double, 2>, 4> foothold;
     // initial leg configuration
     if (use_init_conf) { 
-        foothold = {{hip[0][0] + relative_foothold[0][0], hip[0][1] + relative_foothold[0][1]},   
-                    {hip[1][0] + relative_foothold[1][0], hip[1][1] + relative_foothold[1][1]},
-                    {hip[2][0] + relative_foothold[2][0], hip[2][1] + relative_foothold[2][1]},
-                    {hip[3][0] + relative_foothold[3][0], hip[3][1] + relative_foothold[3][1]}};
+        foothold = {{{hip[0][0] + relative_foothold[0][0], hip[0][1] + relative_foothold[0][1]},   
+                     {hip[1][0] + relative_foothold[1][0], hip[1][1] + relative_foothold[1][1]},
+                     {hip[2][0] + relative_foothold[2][0], hip[2][1] + relative_foothold[2][1]},
+                     {hip[3][0] + relative_foothold[3][0], hip[3][1] + relative_foothold[3][1]}}};
     } else {
-        foothold = {{hip[0][0] - step_length/2*(1-swing_time), hip[0][1] - stand_height},   
-                    {hip[1][0] + step_length/8*(1-swing_time), hip[1][1] - stand_height},
-                    {hip[2][0] - step_length/8*(1-swing_time), hip[2][1] - stand_height},
-                    {hip[3][0] + step_length/2*(1-swing_time), hip[3][1] - stand_height}};
+        foothold = {{{hip[0][0] - step_length/2*(1-swing_time), hip[0][1] - stand_height},   
+                     {hip[1][0] + step_length/8*(1-swing_time), hip[1][1] - stand_height},
+                     {hip[2][0] - step_length/8*(1-swing_time), hip[2][1] - stand_height},
+                     {hip[3][0] + step_length/2*(1-swing_time), hip[3][1] - stand_height}}};
     }//end if else
 
     // Initial stored data
@@ -117,29 +121,59 @@ int main() {
     double dS = velocity / sampling;
     double incre_duty = dS / step_length;
     double traveled_distance = 0.0;
-    SwingProfile sp[4];
+    std::vector<SwingProfile> sp(4);
+    std::string touch_rim_list[3] = {"G", "L_l", "U_l"};
+    int touch_rim_idx[3] = {3, 2, 1};
 
     // Initial teata, beta
+    std::array<double, 2> result_eta;
     std::string rim_list[5] = {"G", "L_l", "L_r", "U_l", "U_r"};
     int rim_idx[5] = {3, 2, 4, 1, 5};
     double contact_hieght_list[5] = {leg_model.r, leg_model.radius, leg_model.radius, leg_model.radius, leg_model.radius};
     for (int i=0; i<4; i++) {
-        double contact_point[2] = {foothold[i][0] - hip[i][0], foothold[i][1] - hip[i][1] + contact_hieght_list[current_rim-1]};
-        double result_eta[2] = leg_model.inverse(, rim_list[current_rim-1]);
+        // calculate contact rim of initial pose
+        for (int j=0; j<5; j++) {
+            double contact_point[2] = {foothold[i][0] - hip[i][0], foothold[i][1] - hip[i][1] + contact_hieght_list[j]};
+            result_eta = leg_model.inverse(contact_point, rim_list[j]);
+            leg_model.contact_map(result_eta[0], result_eta[1]);
+            if (leg_model.rim == rim_idx[j])
+                break;
+        }
         current_theta[i] = result_eta[0];
         current_beta[i]  = result_eta[1];
     }//end for
-
+    // Check and update theta, beta
+    for (int i=0; i<4; i++) {
+        if (current_theta[i] > M_PI*160.0/180.0) {
+            std::cout << "Exceed upper bound." << std::endl;
+        }//end if 
+        if (current_theta[i] < M_PI*17.0/180.0) {
+            std::cout << "Exceed lower bound." << std::endl;
+        }//end if 
+        motor_cmd_modules[i]->theta = current_theta[i];
+        if (i==1 || i==2) {
+            motor_cmd_modules[i]->beta  = current_beta[i];
+        } else {
+            motor_cmd_modules[i]->beta  = -current_beta[i];
+        }
+        std::cout << "current_theta " << i << ": "<< current_theta[i]*180.0/M_PI << std::endl;
+        std::cout << "current_beta " << i << ": "<< current_beta[i]*180.0/M_PI << std::endl;
+    }//end for
+    for (int i=0; i<1000; i++) {
+        motor_pub.publish(motor_cmd);
+        rate.sleep();
+    }
+    
     // Start walking
     while (traveled_distance <= forward_distance) {
         for (int i=0; i<4; i++) {
-            std::array<double, 2> result_eta[2];
             if (swing_phase[i] == 0) { // Stance phase
                 result_eta = leg_model.move(current_theta[i], current_beta[i], {dS, 0});
             } else { // Swing phase
                 double swing_phase_ratio = (duty[i] - (1 - swing_time)) / swing_time;
                 // Placeholder swing profile calculation
-                double curve_point[2] = sp[i].getFootendPoint(swing_phase_ratio);
+                double* temp = sp[i].getFootendPoint(swing_phase_ratio);
+                double curve_point[2] = {temp[0]-hip[i][0], temp[1]-hip[i][1]};
                 result_eta = leg_model.inverse(curve_point, "G");
             }//end if else
             next_theta[i] = result_eta[0];
@@ -150,33 +184,35 @@ int main() {
                 swing_phase[i] = 1;
                 foothold[i] = {hip[i][0] + ((1-swing_time)/2+swing_time)*step_length, 0};
                 // Bezier curve for swing phase
-                leg_model.forward(current_theta[i], current_beta[i]);
+                leg_model.forward(next_theta[i], next_beta[i]);
                 double p_lo[2] = {hip[i][0] + leg_model.G[0], hip[i][1] + leg_model.G[1]};  // G position when leave ground
                 // calculate contact rim when touch ground
-                for (int j=0; j<5; j++) {   // G, L_l, L_r, U_l, U_r
-                    result_eta = leg_model.inverse({step_length/2*(1-swing_time), -stand_height+contact_hieght[j]}, rim_list[j]);
-                    leg_model.contact_map(result_eta[0], result_eta[1]);    // also get joint positions when touch ground, in polar coordinate (x+jy).
-                    if (leg_model.rim == rim_idx[j]) {
+                for (int j=0; j<3; j++) {   // G, L_l, U_l
+                    double contact_point[2] = {step_length/2*(1-swing_time), -stand_height+contact_hieght_list[j]};
+                    result_eta = leg_model.inverse(contact_point, touch_rim_list[j]);
+                    leg_model.contact_map(result_eta[0], result_eta[1]);
+                    if (leg_model.rim == touch_rim_idx[j]) {
                         current_rim = leg_model.rim;
                         break;
                     }//end if
                 }//end for
                 // G position when touch ground
-                double p_td[2];
+                leg_model.forward(result_eta[0], result_eta[1]);
+                std::array<double, 2> p_td;
                 if (current_rim == 3) {   // G
                     p_td = {foothold[i][0], foothold[i][1] + leg_model.r};
                 } else if (current_rim == 2) {  // L_l
-                    p_td = {foothold[i][0] + leg_model.G.real-leg_model.L_l.real, foothold[i][1] + leg_model.G.imag-leg_model.L_l.imag + leg_model.radius};
+                    p_td = {foothold[i][0] + leg_model.G[0]-leg_model.L_l[0], foothold[i][1] + leg_model.G[1]-leg_model.L_l[1] + leg_model.radius};
                 } else if (current_rim == 1) {  // U_l
-                    p_td = {foothold[i][0] + leg_model.G.real-leg_model.U_l.real, foothold[i][1] + leg_model.G.imag-leg_model.U_l.imag + leg_model.radius};
+                    p_td = {foothold[i][0] + leg_model.G[0]-leg_model.U_l[0], foothold[i][1] + leg_model.G[1]-leg_model.U_l[1] + leg_model.radius};
                 }//end if else
-                sp[i](p_td[0] - p_lo[0], step_height, 0.0, 0.0, 0.0, 0.0, 0.0, p_lo[0], p_lo[1], p_td[1] - p_lo[1]);
+                sp[i] = SwingProfile(p_td[0] - p_lo[0], step_height, 0.0, 0.0, 0.0, 0.0, 0.0, p_lo[0], p_lo[1], p_td[1] - p_lo[1]);
             } else if (duty[i] >= 1.0) {
                 swing_phase[i] = 0;
                 duty[i] -= 1.0;
             }//end if else
 
-            hip[i][0] += dS
+            hip[i][0] += dS;
         }//end for
         traveled_distance += dS;
 
@@ -188,13 +224,21 @@ int main() {
             if (next_theta[i] < M_PI*17.0/180.0) {
                 std::cout << "Exceed lower bound." << std::endl;
             }//end if 
-            motor_cmd_modules[i].theta = next_theta[i];
-            motor_cmd_modules[i].beta  = next_beta[i];
+            motor_cmd_modules[i]->theta = next_theta[i];
+            if (i==1 || i==2) {
+                motor_cmd_modules[i]->beta  = next_beta[i];
+            } else {
+                motor_cmd_modules[i]->beta  = -next_beta[i];
+            }
             current_theta[i] = next_theta[i];
             current_beta[i]  = next_beta[i];
+            std::cout << "current_theta " << i << ": "<< current_theta[i]*180.0/M_PI << std::endl;
+            std::cout << "current_beta " << i << ": "<< current_beta[i]*180.0/M_PI << std::endl;
         }//end for
-        motor_pub.pub(motor_cmd);
+        motor_pub.publish(motor_cmd);
+        rate.sleep();
     }//end while
 
+    ros::shutdown();
     return 0;
 }//end main
