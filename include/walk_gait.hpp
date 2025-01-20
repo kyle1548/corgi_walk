@@ -62,6 +62,7 @@ class WalkGait {
         std::array<double, 2> result_eta;
         std::array<double, 2> p_lo;
         std::array<double, 2> p_td;
+        double stand_height_diff = 0.0;
 };//end class WalkGait
 
 #endif // WALKGAIT_HPP
