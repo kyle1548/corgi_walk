@@ -90,10 +90,10 @@ std::array<std::array<double, 4>, 2> WalkGait::step() {
         if (swing_phase[i] == 0) { // Stance phase
             result_eta = leg_model.move(theta[i], beta[i], {next_hip[i][0]-hip[i][0], next_hip[i][1]-hip[i][1]});
         } else { // Swing phase
-            if (direction == 1) {
-                swing_phase_ratio = (duty[i] - (1 - swing_time)) / swing_time;
-            } else {    // direction == -1
+            if (duty[i] < 0.0) {    // direction == -1
                 swing_phase_ratio = - duty[i] / swing_time;
+            } else {    // duty[i] > (1 - swing_time) -> direction == 1
+                swing_phase_ratio = (duty[i] - (1 - swing_time)) / swing_time;
             }//end if else
             curve_point_temp = sp[i].getFootendPoint(swing_phase_ratio);
             double curve_point[2] = {curve_point_temp[0] - next_hip[i][0], curve_point_temp[1] - next_hip[i][1]};
@@ -103,7 +103,10 @@ std::array<std::array<double, 4>, 2> WalkGait::step() {
         beta[i] = result_eta[1];
 
         duty[i] += incre_duty;
-        if ((duty[i] > (1 - swing_time) || duty[i] < 0) && swing_phase[i] == 0) {
+        if (duty[i] <=0){
+            duty[i] += 1.0;
+        }
+        if ((duty[i] > (1 - swing_time)) && swing_phase[i] == 0) {
             swing_phase[i] = 1;
             foothold[i] = {next_hip[i][0] + direction*((1-swing_time)/2+swing_time)*step_length, 0};
             // Bezier curve setup
@@ -133,12 +136,11 @@ std::array<std::array<double, 4>, 2> WalkGait::step() {
             if ( ((direction == 1) && (i==2 || i==3)) || ((direction == -1) && (i==0 || i==1)) ) {
                 step_length = new_step_length;
             }//end if 
-        } else if (duty[i] >= 1.0) {    // entering stance phase when velocirty > 0
+        } else if ( (direction == 1) && (duty[i] > 1.0)) {             // entering stance phase when velocirty > 0
             swing_phase[i] = 0;
             duty[i] -= 1.0;
-        } else if (duty[i] <= -swing_time) {    // entering stance phase when velocirty < 0
+        } else if ( (direction == -1) && (duty[i] < (1.0-swing_time))) {    // entering stance phase when velocirty < 0
             swing_phase[i] = 0;
-            duty[i] += 1.0;
         }//end if else
 
         hip[i] = next_hip[i];
